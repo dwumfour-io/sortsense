@@ -132,8 +132,92 @@ class SortSense:
         self.session_id = generate_session_id()
         self.results: List[FileAnalysis] = []
         
+        # Folder path cache (discovered from destination)
+        self._folder_path_cache: Dict[str, str] = {}
+        
         # Progress callback
         self._progress_callback: Optional[Callable[[int, int, str], None]] = None
+    
+    def discover_existing_folders(self, max_depth: int = 3) -> Dict[str, str]:
+        """
+        Scan destination folder recursively to find existing category folders.
+        
+        This allows SortSense to find folders like:
+          ~/Documents/personal/housing  → housing
+          ~/Documents/personal/vehicles → vehicles
+          
+        Args:
+            max_depth: Maximum folder depth to search
+            
+        Returns:
+            Dict mapping folder names to their full paths
+        """
+        discovered = {}
+        base = Path(self.destination)
+        
+        if not base.exists():
+            return discovered
+        
+        # Get all category folder names from config
+        category_folders = set()
+        for cat_name, cat_config in self.config.categories.items():
+            folder_name = cat_config.get("folder", cat_name)
+            # Handle nested paths like "personal/housing" - extract the leaf name
+            leaf_name = Path(folder_name).name
+            category_folders.add(leaf_name.lower())
+        
+        # Walk the destination folder tree
+        def walk_folders(path: Path, depth: int = 0):
+            if depth > max_depth:
+                return
+            
+            try:
+                for item in path.iterdir():
+                    if item.is_dir() and not item.name.startswith('.'):
+                        folder_name_lower = item.name.lower()
+                        
+                        # Check if this folder matches any category
+                        if folder_name_lower in category_folders:
+                            # Store relative path from destination
+                            rel_path = item.relative_to(base)
+                            
+                            # Prefer shallower paths (don't overwrite if already found)
+                            if folder_name_lower not in discovered:
+                                discovered[folder_name_lower] = str(rel_path)
+                                logger.debug(f"Discovered folder: {item.name} at {rel_path}")
+                        
+                        # Continue searching subdirectories
+                        walk_folders(item, depth + 1)
+            except PermissionError:
+                pass
+        
+        walk_folders(base)
+        self._folder_path_cache = discovered
+        
+        if discovered:
+            logger.info(f"Discovered {len(discovered)} existing category folders")
+        
+        return discovered
+    
+    def get_folder_path(self, category: str) -> str:
+        """
+        Get the folder path for a category, using discovered paths if available.
+        
+        Args:
+            category: Category name
+            
+        Returns:
+            Folder path (relative to destination)
+        """
+        cat_config = self.config.categories.get(category, {})
+        folder_name = cat_config.get("folder", category)
+        
+        # Check if we discovered this folder in a nested location
+        leaf_name = Path(folder_name).name.lower()
+        if leaf_name in self._folder_path_cache:
+            return self._folder_path_cache[leaf_name]
+        
+        return folder_name
     
     def set_progress_callback(self, callback: Callable[[int, int, str], None]) -> None:
         """
@@ -195,6 +279,10 @@ class SortSense:
                     error_msg = f"Vision analysis failed: {str(e)}"
         
         # Build result
+        # Use discovered folder path if available
+        folder_path = self.get_folder_path(category)
+        dest_folder = os.path.join(self.destination, folder_path)
+        
         result = FileAnalysis(
             filepath=filepath,
             filename=filename,
@@ -205,9 +293,7 @@ class SortSense:
             category=category,
             confidence_score=score,
             keyword_matches=matches,
-            recommended_destination=self.categorizer.get_destination_folder(
-                category, self.destination
-            ),
+            recommended_destination=dest_folder,
             error_message=error_msg
         )
         

@@ -189,6 +189,11 @@ Examples:
         help='Only use folders that already exist in destination (don\'t create new category folders)'
     )
     organize_parser.add_argument(
+        '--discover-folders',
+        action='store_true',
+        help='Scan destination recursively to find existing category folders (e.g., personal/vehicles)'
+    )
+    organize_parser.add_argument(
         '--interactive',
         '-i',
         action='store_true',
@@ -318,6 +323,16 @@ def cmd_organize(args: argparse.Namespace) -> int:
         config=config,
         use_vision=use_vision
     )
+    
+    # Discover existing folders if requested
+    discover_folders = getattr(args, 'discover_folders', False)
+    if discover_folders:
+        print("🔍 Scanning destination for existing folders...")
+        discovered = ss.discover_existing_folders()
+        if discovered:
+            print(f"   Found {len(discovered)} category folders:")
+            for name, path in discovered.items():
+                print(f"   • {name} → {path}")
     
     print(f"\n📂 Organizing: {folder}")
     print(f"📍 Destination: {args.destination}")

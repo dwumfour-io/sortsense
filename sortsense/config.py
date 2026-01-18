@@ -202,6 +202,9 @@ class Config:
     # Categories
     categories: Dict[str, Dict[str, Any]] = field(default_factory=lambda: DEFAULT_CATEGORIES.copy())
     
+    # Vision categories (for CLIP model)
+    vision_categories: Optional[Dict[str, List[str]]] = None
+    
     # Settings
     settings: Settings = field(default_factory=Settings)
     
@@ -340,6 +343,10 @@ def load_config(config_path: Optional[str] = None) -> Config:
             config.pdftotext_path = tools["pdftotext"]
         if "pdftoppm" in tools:
             config.pdftoppm_path = tools["pdftoppm"]
+    
+    # Apply vision categories
+    if "vision_categories" in data:
+        config.vision_categories = data["vision_categories"]
     
     return config
 

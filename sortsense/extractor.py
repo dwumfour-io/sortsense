@@ -32,7 +32,9 @@ class TextExtractor:
         """Initialize vision analyzer if available"""
         try:
             from sortsense.vision import VisionAnalyzer
-            self.vision_analyzer = VisionAnalyzer()
+            # Pass user's vision categories if available
+            vision_cats = self.config.vision_categories if hasattr(self.config, 'vision_categories') else None
+            self.vision_analyzer = VisionAnalyzer(categories=vision_cats)
             if self.vision_analyzer.is_available():
                 logger.info("Vision analysis enabled")
             else:

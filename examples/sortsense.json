@@ -1,0 +1,76 @@
+{
+  "categories": {
+    "finance": {
+      "description": "Financial & Receipts",
+      "folder": "finance",
+      "keywords": [
+        "invoice", "receipt", "payment", "transaction", "bank", 
+        "statement", "tax", "w-2", "1099", "paystub"
+      ]
+    },
+    "immigration": {
+      "description": "Immigration & Identity Documents",
+      "folder": "immigration",
+      "keywords": [
+        "visa", "passport", "immigration", "uscis", "h1b", 
+        "green card", "citizenship", "birth certificate"
+      ]
+    },
+    "career": {
+      "description": "Career & Employment",
+      "folder": "career",
+      "keywords": [
+        "resume", "cv", "cover letter", "job application",
+        "offer letter", "interview", "linkedin"
+      ]
+    },
+    "medical": {
+      "description": "Health & Medical",
+      "folder": "medical",
+      "keywords": [
+        "medical", "health", "doctor", "hospital", "prescription",
+        "patient", "vaccination", "lab results"
+      ]
+    },
+    "education": {
+      "description": "Education & Academic",
+      "folder": "education",
+      "keywords": [
+        "transcript", "degree", "diploma", "university", "college",
+        "course", "student", "academic", "gpa"
+      ]
+    },
+    "dev": {
+      "description": "Development & Technology",
+      "folder": "dev",
+      "keywords": [
+        "programming", "python", "javascript", "github", "code",
+        "software", "api", "server", "database"
+      ]
+    },
+    "housing": {
+      "description": "Housing & Property",
+      "folder": "housing",
+      "keywords": [
+        "lease", "rent", "apartment", "landlord", "tenant",
+        "mortgage", "property", "utilities"
+      ]
+    },
+    "vehicles": {
+      "description": "Vehicles & Transportation",
+      "folder": "vehicles",
+      "keywords": [
+        "vehicle", "car", "registration", "dmv", "insurance",
+        "maintenance", "license plate"
+      ]
+    }
+  },
+  "settings": {
+    "ocr_timeout": 30,
+    "max_text_length": 2000,
+    "default_category": "unsorted",
+    "min_confidence": 1,
+    "skip_hidden": true,
+    "verbose": false
+  }
+}

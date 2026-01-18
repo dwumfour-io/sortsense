@@ -34,13 +34,14 @@ class FileAnalysis:
     filename: str
     extension: str
     file_size: int
-    extraction_method: str  # 'ocr', 'text', 'pdf', 'docx', 'xlsx', 'filename', 'skip', 'error'
+    extraction_method: str  # 'ocr', 'text', 'pdf', 'docx', 'xlsx', 'filename', 'skip', 'error', 'vision'
     extracted_text: str
     category: str
     confidence_score: int
     keyword_matches: List[str] = field(default_factory=list)
     recommended_destination: str = ""
     error_message: str = ""
+    vision_label: str = ""  # Raw vision detection (e.g., 'wedding', 'car') for interactive folder creation
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary"""
@@ -263,6 +264,7 @@ class SortSense:
         vision_category = ""
         vision_score = 0.0
         vision_matches = []
+        vision_label = ""  # Raw detection label (e.g., 'wedding photo' -> 'wedding')
         
         if self.use_vision and category in ('uncategorized', 'unsorted'):
             # Check if it's an image file
@@ -271,6 +273,18 @@ class SortSense:
                 try:
                     vision_category, vision_score, vision_matches = self.extractor.extract_with_vision(filepath)
                     if vision_category and vision_score > 0.3:  # Confidence threshold
+                        # Extract raw label from matches (e.g., 'a wedding photo' -> 'wedding')
+                        if vision_matches:
+                            raw_match = vision_matches[0].split('(')[0].strip()
+                            # Clean up the label: remove 'a ', 'photo', etc.
+                            for prefix in ['a ', 'an ']:
+                                if raw_match.lower().startswith(prefix):
+                                    raw_match = raw_match[len(prefix):]
+                            for suffix in [' photo', ' photograph', ' picture', ' image']:
+                                if raw_match.lower().endswith(suffix):
+                                    raw_match = raw_match[:-len(suffix)]
+                            vision_label = raw_match.strip().lower()
+                        
                         category = vision_category
                         score = vision_score
                         matches = vision_matches
@@ -294,7 +308,8 @@ class SortSense:
             confidence_score=score,
             keyword_matches=matches,
             recommended_destination=dest_folder,
-            error_message=error_msg
+            error_message=error_msg,
+            vision_label=vision_label
         )
         
         return result
@@ -471,19 +486,37 @@ class SortSense:
             folder_exists = folder_name in existing_folders
             
             # Interactive mode: prompt for new folders
-            if interactive and not folder_exists and not dry_run:
-                if folder_name not in folder_decisions:
-                    # Ask user
-                    print(f"\n  📁 Folder '{folder_name}/' doesn't exist.")
-                    print(f"     File: {result.filename}")
-                    print(f"     Confidence: {confidence_normalized*100:.1f}%")
-                    response = input(f"     Create '{folder_name}/'? [y/N]: ").strip().lower()
-                    folder_decisions[folder_name] = response in ('y', 'yes')
-                    
-                    if folder_decisions[folder_name]:
-                        existing_folders.add(folder_name)  # Add to existing set
+            # If vision detected a specific label (e.g., 'wedding'), offer to create that folder
+            if interactive and not dry_run:
+                prompt_folder = None
                 
-                if not folder_decisions.get(folder_name, False):
+                # Check if vision detected a specific type
+                if result.vision_label and result.vision_label != folder_name:
+                    # Check if vision label folder exists
+                    vision_folder_exists = result.vision_label in existing_folders or result.vision_label in self._folder_path_cache
+                    if not vision_folder_exists:
+                        prompt_folder = result.vision_label
+                        dest_folder = os.path.join(self.destination, 'personal', result.vision_label)
+                elif not folder_exists:
+                    prompt_folder = folder_name
+                
+                if prompt_folder and prompt_folder not in folder_decisions:
+                    # Ask user
+                    print(f"\n  📁 Folder '{prompt_folder}/' doesn't exist.")
+                    print(f"     File: {result.filename}")
+                    if result.vision_label:
+                        print(f"     Detected: {result.vision_label}")
+                    print(f"     Confidence: {confidence_normalized*100:.1f}%")
+                    response = input(f"     Create '{prompt_folder}/'? [y/N]: ").strip().lower()
+                    folder_decisions[prompt_folder] = response in ('y', 'yes')
+                    
+                    if folder_decisions[prompt_folder]:
+                        existing_folders.add(prompt_folder)  # Add to existing set
+                        # Update destination if it was a vision label
+                        if result.vision_label and prompt_folder == result.vision_label:
+                            dest_folder = os.path.join(self.destination, 'personal', result.vision_label)
+                
+                if prompt_folder and not folder_decisions.get(prompt_folder, False):
                     # User said NO - move to personal/misc
                     category = 'misc'
                     dest_folder = misc_folder

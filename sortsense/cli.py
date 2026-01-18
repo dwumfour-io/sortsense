@@ -179,9 +179,9 @@ Examples:
     organize_parser.add_argument(
         '--misc-threshold',
         type=float,
-        default=0.0,
+        default=0.5,
         metavar='PCT',
-        help='Move files below this confidence (0.0-1.0) to misc/ folder (e.g., 0.35 for 35%%)'
+        help='Move files below this confidence to misc/ folder (default: 0.5 = 50%%)'
     )
     organize_parser.add_argument(
         '--existing-only',

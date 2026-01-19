@@ -42,6 +42,7 @@ class FileAnalysis:
     recommended_destination: str = ""
     error_message: str = ""
     vision_label: str = ""  # Raw vision detection (e.g., 'wedding', 'car') for interactive folder creation
+    detected_subfolder: str = ""  # Detected subfolder name (e.g., 'chase', 'gtfs') from content or parent folder
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary"""
@@ -220,6 +221,61 @@ class SortSense:
         
         return folder_name
     
+    def detect_subfolder(self, filepath: str, text: str, category: str) -> str:
+        """
+        Detect a subfolder name from file content or parent folder.
+        
+        Strategy:
+        1. Use parent folder name if it's not a common folder (Downloads, Desktop, etc.)
+        2. For financial docs, try to detect bank/institution name
+        3. For dev files, use project folder name
+        
+        Args:
+            filepath: Path to the file
+            text: Extracted text from the file
+            category: The detected category
+            
+        Returns:
+            Subfolder name or empty string if none detected
+        """
+        # Get parent folder name
+        parent_folder = os.path.basename(os.path.dirname(filepath))
+        
+        # Common folders to ignore
+        ignore_folders = {'downloads', 'desktop', 'documents', 'pictures', 'videos', 
+                          'music', 'home', 'users', 'tmp', 'temp', '~'}
+        
+        # If parent folder is meaningful (not a common system folder), use it
+        if parent_folder.lower() not in ignore_folders and not parent_folder.startswith('.'):
+            # Clean up the folder name (lowercase, replace spaces with dashes)
+            subfolder = parent_folder.lower().replace(' ', '-')
+            return subfolder
+        
+        # For financial category, try to detect institution from content
+        if category in ('sikasem', 'finance', 'financial'):
+            text_lower = text.lower() if text else ''
+            # Common financial institutions
+            institutions = {
+                'chase': ['chase bank', 'jpmorgan chase', 'chase.com'],
+                'bank-of-america': ['bank of america', 'bofa', 'bankofamerica'],
+                'wells-fargo': ['wells fargo', 'wellsfargo'],
+                'capital-one': ['capital one', 'capitalone'],
+                'navy-federal': ['navy federal', 'navyfcu'],
+                'usaa': ['usaa'],
+                'penfed': ['pentagon federal', 'penfed'],
+                'discover': ['discover card', 'discover.com'],
+                'amex': ['american express', 'amex'],
+                'citi': ['citibank', 'citi.com'],
+                'langley': ['langley federal', 'langleyfcu'],
+                'digital-fcu': ['digital federal', 'dcu'],
+            }
+            for subfolder, patterns in institutions.items():
+                for pattern in patterns:
+                    if pattern in text_lower:
+                        return subfolder
+        
+        return ""
+    
     def set_progress_callback(self, callback: Callable[[int, int, str], None]) -> None:
         """
         Set a callback for progress updates.
@@ -297,6 +353,9 @@ class SortSense:
         folder_path = self.get_folder_path(category)
         dest_folder = os.path.join(self.destination, folder_path)
         
+        # Detect subfolder from content or parent folder
+        detected_subfolder = self.detect_subfolder(filepath, text, category)
+        
         result = FileAnalysis(
             filepath=filepath,
             filename=filename,
@@ -309,7 +368,8 @@ class SortSense:
             keyword_matches=matches,
             recommended_destination=dest_folder,
             error_message=error_msg,
-            vision_label=vision_label
+            vision_label=vision_label,
+            detected_subfolder=detected_subfolder
         )
         
         return result
@@ -485,26 +545,49 @@ class SortSense:
             # Check if folder exists
             folder_exists = folder_name in existing_folders
             
-            # Interactive mode: prompt for new folders
-            # If vision detected a specific label (e.g., 'wedding'), offer to create that folder
-            if interactive and not dry_run:
-                prompt_folder = None
+            # Track subfolder for display and creation
+            parent_category_folder = dest_folder
+            is_subfolder = False
+            prompt_folder = None
+            
+            # Check if we detected a subfolder (e.g., 'gtfs', 'new-folder-with-items')
+            if result.detected_subfolder:
+                subfolder_path = os.path.join(dest_folder, result.detected_subfolder)
+                subfolder_exists = os.path.exists(subfolder_path)
                 
-                # Check if vision detected a specific type
-                if result.vision_label and result.vision_label != folder_name:
+                if subfolder_exists:
+                    # Subfolder exists, use it
+                    dest_folder = subfolder_path
+                else:
+                    # Subfolder doesn't exist - will prompt in interactive mode
+                    is_subfolder = True
+                    prompt_folder = result.detected_subfolder
+                    # For dry run, show the target subfolder
+                    if dry_run:
+                        dest_folder = subfolder_path
+            
+            # Interactive mode: prompt for new folders
+            if interactive and not dry_run:
+                # Also check if vision detected a specific type (and no subfolder detected)
+                if not prompt_folder and result.vision_label and result.vision_label != folder_name:
                     # Check if vision label folder exists
                     vision_folder_exists = result.vision_label in existing_folders or result.vision_label in self._folder_path_cache
                     if not vision_folder_exists:
                         prompt_folder = result.vision_label
                         dest_folder = os.path.join(self.destination, 'personal', result.vision_label)
-                elif not folder_exists:
+                elif not prompt_folder and not folder_exists:
                     prompt_folder = folder_name
                 
                 if prompt_folder and prompt_folder not in folder_decisions:
                     # Ask user
-                    print(f"\n  📁 Folder '{prompt_folder}/' doesn't exist.")
+                    if is_subfolder:
+                        print(f"\\n  📁 Subfolder '{prompt_folder}/' doesn't exist in {os.path.basename(parent_category_folder)}/")
+                    else:
+                        print(f"\\n  📁 Folder '{prompt_folder}/' doesn't exist.")
                     print(f"     File: {result.filename}")
-                    if result.vision_label:
+                    if result.detected_subfolder:
+                        print(f"     Detected from: parent folder")
+                    elif result.vision_label:
                         print(f"     Detected: {result.vision_label}")
                     print(f"     Confidence: {confidence_normalized*100:.1f}%")
                     response = input(f"     Create '{prompt_folder}/'? [y/N]: ").strip().lower()
@@ -512,14 +595,18 @@ class SortSense:
                     
                     if folder_decisions[prompt_folder]:
                         existing_folders.add(prompt_folder)  # Add to existing set
-                        # Update destination if it was a vision label
-                        if result.vision_label and prompt_folder == result.vision_label:
+                        # Update destination
+                        if is_subfolder:
+                            dest_folder = os.path.join(parent_category_folder, result.detected_subfolder)
+                        elif result.vision_label and prompt_folder == result.vision_label:
                             dest_folder = os.path.join(self.destination, 'personal', result.vision_label)
                 
                 if prompt_folder and not folder_decisions.get(prompt_folder, False):
-                    # User said NO - move to personal/misc
-                    category = 'misc'
-                    dest_folder = misc_folder
+                    # User said NO - move to category-misc subfolder
+                    category_name = os.path.basename(parent_category_folder if is_subfolder else dest_folder)
+                    misc_subfolder = os.path.join(parent_category_folder if is_subfolder else dest_folder, f"{category_name}-misc")
+                    category = f'{category_name}-misc'
+                    dest_folder = misc_subfolder
             
             # Check existing_only mode (non-interactive)
             elif existing_only and not folder_exists:

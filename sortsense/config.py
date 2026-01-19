@@ -126,6 +126,7 @@ PDF_EXTENSIONS = {'.pdf'}
 WORD_EXTENSIONS = {'.docx', '.doc'}
 EXCEL_EXTENSIONS = {'.xlsx', '.xls'}
 TEXT_EXTENSIONS = {'.txt', '.md', '.rtf', '.json', '.xml', '.csv', '.log'}
+FINANCIAL_EXTENSIONS = {'.ofx', '.qfx', '.qbo', '.qif'}  # Open Financial Exchange formats
 SPREADSHEET_EXTENSIONS = {'.xlsx', '.xls', '.numbers', '.csv', '.ods'}
 
 
@@ -214,6 +215,7 @@ class Config:
     word_extensions: set = field(default_factory=lambda: WORD_EXTENSIONS.copy())
     excel_extensions: set = field(default_factory=lambda: EXCEL_EXTENSIONS.copy())
     text_extensions: set = field(default_factory=lambda: TEXT_EXTENSIONS.copy())
+    financial_extensions: set = field(default_factory=lambda: FINANCIAL_EXTENSIONS.copy())
     
     def has_ocr(self) -> bool:
         """Check if OCR is available"""

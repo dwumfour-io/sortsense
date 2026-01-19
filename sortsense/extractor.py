@@ -53,7 +53,7 @@ class TextExtractor:
             
         Returns:
             Tuple of (extraction_method, extracted_text)
-            Methods: 'ocr', 'text', 'pdf', 'docx', 'xlsx', 'vision', 'filename', 'skip', 'error'
+            Methods: 'ocr', 'text', 'pdf', 'docx', 'xlsx', 'ofx', 'vision', 'filename', 'skip', 'error'
         """
         ext = os.path.splitext(filepath)[1].lower()
         
@@ -65,6 +65,8 @@ class TextExtractor:
             return self.extract_from_docx(filepath)
         elif ext in self.config.excel_extensions:
             return self.extract_from_xlsx(filepath)
+        elif ext in self.config.financial_extensions:
+            return self.extract_from_ofx(filepath)
         elif ext in self.config.text_extensions:
             return self.extract_from_text(filepath)
         else:
@@ -218,6 +220,68 @@ class TextExtractor:
             return 'skip', ''
         except Exception as e:
             logger.error(f"Error extracting DOCX {filepath}: {e}")
+            return 'error', str(e)[:100]
+    
+    def extract_from_ofx(self, filepath: str) -> Tuple[str, str]:
+        """
+        Extract text from OFX/QFX financial files.
+        
+        OFX (Open Financial Exchange) and QFX (Quicken) are SGML/XML-like
+        formats containing bank transactions, account info, etc.
+        
+        Args:
+            filepath: Path to .ofx/.qfx/.qbo/.qif file
+            
+        Returns:
+            Tuple of (method, text) with key financial data extracted
+        """
+        try:
+            import re
+            
+            with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+                content = f.read()
+            
+            # Extract meaningful data from OFX format
+            extracted_parts = []
+            
+            # Bank/Institution info
+            patterns = {
+                'bank_id': r'<BANKID>([^<\n]+)',
+                'account_id': r'<ACCTID>([^<\n]+)',
+                'org': r'<ORG>([^<\n]+)',
+                'fid': r'<FID>([^<\n]+)',
+                'broker': r'<BROKERID>([^<\n]+)',
+                'account_type': r'<ACCTTYPE>([^<\n]+)',
+            }
+            
+            for name, pattern in patterns.items():
+                matches = re.findall(pattern, content, re.IGNORECASE)
+                for match in matches:
+                    extracted_parts.append(f"{name}: {match.strip()}")
+            
+            # Transaction info
+            trans_patterns = {
+                'transaction_type': r'<TRNTYPE>([^<\n]+)',
+                'amount': r'<TRNAMT>([^<\n]+)',
+                'name': r'<NAME>([^<\n]+)',
+                'memo': r'<MEMO>([^<\n]+)',
+                'payee': r'<PAYEE>([^<\n]+)',
+                'check_num': r'<CHECKNUM>([^<\n]+)',
+            }
+            
+            for name, pattern in trans_patterns.items():
+                matches = re.findall(pattern, content, re.IGNORECASE)[:10]  # First 10 transactions
+                for match in matches:
+                    extracted_parts.append(f"{name}: {match.strip()}")
+            
+            # Add keywords for categorization
+            extracted_parts.extend(['bank', 'transaction', 'statement', 'financial', 'account'])
+            
+            text = ' '.join(extracted_parts)
+            return 'ofx', text[:self.config.settings.max_text_length]
+            
+        except Exception as e:
+            logger.error(f"Error extracting OFX {filepath}: {e}")
             return 'error', str(e)[:100]
     
     def extract_from_xlsx(self, filepath: str) -> Tuple[str, str]:

@@ -27,6 +27,24 @@ logger = logging.getLogger(__name__)
 # ═══════════════════════════════════════════════════════════════════════════
 
 @dataclass
+class FolderAnalysis:
+    """Result of analyzing an entire folder as a cohesive unit"""
+    
+    folder_path: str
+    folder_name: str
+    file_count: int
+    dominant_category: str
+    confidence_score: float
+    is_cohesive: bool  # True if all files belong together
+    recommended_destination: str = ""
+    analysis_type: str = ""  # 'app_bundle', 'cohesive_folder', 'mixed'
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary"""
+        return asdict(self)
+
+
+@dataclass
 class FileAnalysis:
     """Result of analyzing a single file"""
     
@@ -43,6 +61,7 @@ class FileAnalysis:
     error_message: str = ""
     vision_label: str = ""  # Raw vision detection (e.g., 'wedding', 'car') for interactive folder creation
     detected_subfolder: str = ""  # Detected subfolder name (e.g., 'chase', 'gtfs') from content or parent folder
+    skip_individual: bool = False  # True if this file is part of a cohesive folder/app bundle
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary"""
@@ -139,6 +158,9 @@ class SortSense:
         
         # Progress callback
         self._progress_callback: Optional[Callable[[int, int, str], None]] = None
+        
+        # Cohesive folder results (folders to move as units)
+        self.folder_results: List[FolderAnalysis] = []
     
     def discover_existing_folders(self, max_depth: int = 3) -> Dict[str, str]:
         """
@@ -276,6 +298,135 @@ class SortSense:
         
         return ""
     
+    def is_app_bundle(self, path: str) -> bool:
+        """
+        Check if a path is a macOS .app bundle.
+        
+        Args:
+            path: Path to check
+            
+        Returns:
+            True if it's an app bundle
+        """
+        return os.path.isdir(path) and path.endswith('.app')
+    
+    def analyze_folder_cohesion(self, folder_path: str) -> Optional[FolderAnalysis]:
+        """
+        Analyze if a folder's contents are cohesive (should move as a unit).
+        
+        A folder is cohesive if:
+        - All files share the same primary category
+        - OR it matches known cohesive folder patterns (GTFS, project folders, etc.)
+        
+        Args:
+            folder_path: Path to the folder to analyze
+            
+        Returns:
+            FolderAnalysis if folder is cohesive, None otherwise
+        """
+        folder_name = os.path.basename(folder_path)
+        folder_name_lower = folder_name.lower()
+        
+        # Known cohesive folder patterns
+        cohesive_patterns = {
+            'gtfs': 'dev',
+            'node_modules': None,  # Skip entirely
+            '__pycache__': None,   # Skip entirely
+            '.git': None,          # Skip entirely
+            'venv': None,          # Skip entirely
+            'env': None,           # Skip entirely
+        }
+        
+        # Check known patterns first
+        if folder_name_lower in cohesive_patterns:
+            target_cat = cohesive_patterns[folder_name_lower]
+            if target_cat is None:
+                return None  # Skip this folder
+            
+            folder_path_obj = Path(folder_path)
+            file_count = sum(1 for _ in folder_path_obj.rglob('*') if _.is_file())
+            dest_folder = os.path.join(self.destination, self.get_folder_path(target_cat), folder_name_lower)
+            
+            return FolderAnalysis(
+                folder_path=folder_path,
+                folder_name=folder_name,
+                file_count=file_count,
+                dominant_category=target_cat,
+                confidence_score=1.0,
+                is_cohesive=True,
+                recommended_destination=dest_folder,
+                analysis_type='cohesive_folder'
+            )
+        
+        # Sample a few files to determine cohesion
+        sample_files = []
+        try:
+            for entry in os.scandir(folder_path):
+                if entry.is_file() and not entry.name.startswith('.'):
+                    sample_files.append(entry.path)
+                    if len(sample_files) >= 5:  # Sample up to 5 files
+                        break
+        except PermissionError:
+            return None
+        
+        if not sample_files:
+            return None
+        
+        # Analyze sample files
+        categories = {}
+        for filepath in sample_files:
+            result = self.analyze_file(filepath)
+            cat = result.category
+            categories[cat] = categories.get(cat, 0) + 1
+        
+        # Check if all files share the same category
+        if len(categories) == 1:
+            dominant_cat = list(categories.keys())[0]
+            if dominant_cat not in ('uncategorized', 'unsorted'):
+                folder_path_obj = Path(folder_path)
+                file_count = sum(1 for _ in folder_path_obj.rglob('*') if _.is_file())
+                dest_folder = os.path.join(
+                    self.destination, 
+                    self.get_folder_path(dominant_cat), 
+                    folder_name_lower.replace(' ', '-')
+                )
+                
+                return FolderAnalysis(
+                    folder_path=folder_path,
+                    folder_name=folder_name,
+                    file_count=file_count,
+                    dominant_category=dominant_cat,
+                    confidence_score=1.0,
+                    is_cohesive=True,
+                    recommended_destination=dest_folder,
+                    analysis_type='cohesive_folder'
+                )
+        
+        # Check if majority (80%+) share same category
+        total_sampled = sum(categories.values())
+        for cat, count in categories.items():
+            if cat not in ('uncategorized', 'unsorted') and count / total_sampled >= 0.8:
+                folder_path_obj = Path(folder_path)
+                file_count = sum(1 for _ in folder_path_obj.rglob('*') if _.is_file())
+                dest_folder = os.path.join(
+                    self.destination, 
+                    self.get_folder_path(cat), 
+                    folder_name_lower.replace(' ', '-')
+                )
+                
+                return FolderAnalysis(
+                    folder_path=folder_path,
+                    folder_name=folder_name,
+                    file_count=file_count,
+                    dominant_category=cat,
+                    confidence_score=count / total_sampled,
+                    is_cohesive=True,
+                    recommended_destination=dest_folder,
+                    analysis_type='cohesive_folder'
+                )
+        
+        return None  # Not cohesive, process files individually
+    
     def set_progress_callback(self, callback: Callable[[int, int, str], None]) -> None:
         """
         Set a callback for progress updates.
@@ -384,6 +535,11 @@ class SortSense:
         """
         Analyze all files in a folder.
         
+        Smart behaviors:
+        - .app bundles are detected and moved as units to downloaded-apps/
+        - Cohesive folders (like GTFS) are moved as units
+        - Statement files are analyzed individually for proper categorization
+        
         Args:
             folder_path: Path to folder to analyze
             recursive: Whether to analyze recursively
@@ -394,14 +550,62 @@ class SortSense:
             List of FileAnalysis results
         """
         self.results = []
+        self.folder_results = []
         files_to_process = []
+        skip_paths = set()  # Paths to skip (inside app bundles or cohesive folders)
         
-        # Collect files
+        # First pass: detect app bundles and cohesive folders
+        try:
+            for entry in os.scandir(folder_path):
+                # Check for .app bundles
+                if entry.is_dir() and entry.name.endswith('.app'):
+                    app_name = entry.name
+                    file_count = sum(1 for _ in Path(entry.path).rglob('*') if _.is_file())
+                    dest_folder = os.path.join(self.destination, 'downloaded-apps')
+                    
+                    folder_analysis = FolderAnalysis(
+                        folder_path=entry.path,
+                        folder_name=app_name,
+                        file_count=file_count,
+                        dominant_category='downloaded-apps',
+                        confidence_score=1.0,
+                        is_cohesive=True,
+                        recommended_destination=dest_folder,
+                        analysis_type='app_bundle'
+                    )
+                    self.folder_results.append(folder_analysis)
+                    skip_paths.add(entry.path)
+                    logger.info(f"Detected app bundle: {app_name}")
+                
+                # Check for cohesive folders (but not statements - those need individual analysis)
+                elif entry.is_dir() and not entry.name.startswith('.'):
+                    folder_name_lower = entry.name.lower()
+                    
+                    # Folders that should be analyzed individually (financial/statements)
+                    individual_analysis_folders = {'statements', 'bank', 'bills', 'invoices', 'receipts'}
+                    
+                    if folder_name_lower not in individual_analysis_folders:
+                        cohesion = self.analyze_folder_cohesion(entry.path)
+                        if cohesion and cohesion.is_cohesive:
+                            self.folder_results.append(cohesion)
+                            skip_paths.add(entry.path)
+                            logger.info(f"Detected cohesive folder: {entry.name} -> {cohesion.dominant_category}")
+        except PermissionError:
+            pass
+        
+        # Collect files (excluding those in app bundles and cohesive folders)
         if recursive:
             for root, dirs, files in os.walk(folder_path):
+                # Skip paths we've marked as cohesive
+                if any(root.startswith(skip_path) for skip_path in skip_paths):
+                    continue
+                
                 # Skip hidden directories
                 if self.config.settings.skip_hidden:
                     dirs[:] = [d for d in dirs if not d.startswith('.')]
+                
+                # Skip app bundles and cohesive folders when walking
+                dirs[:] = [d for d in dirs if os.path.join(root, d) not in skip_paths]
                 
                 for filename in files:
                     if self.config.settings.skip_hidden and filename.startswith('.'):
@@ -486,6 +690,11 @@ class SortSense:
         """
         Execute file moves based on analysis results.
         
+        Handles:
+        - App bundles (.app) → downloaded-apps/
+        - Cohesive folders (GTFS, etc.) → moved as units
+        - Individual files → organized by category
+        
         Args:
             dry_run: If True, only show what would happen
             min_confidence: Minimum confidence score to move file
@@ -499,6 +708,7 @@ class SortSense:
         move_counts: Dict[str, int] = {}
         skipped = 0
         errors = 0
+        folders_moved = 0
         
         default_cat = self.config.settings.default_category
         
@@ -513,6 +723,83 @@ class SortSense:
         
         # Default misc folder location
         misc_folder = os.path.join(self.destination, 'personal', 'misc')
+        
+        # ═══════════════════════════════════════════════════════════════════
+        # PHASE 1: Move cohesive folders and app bundles
+        # ═══════════════════════════════════════════════════════════════════
+        
+        for folder_result in self.folder_results:
+            dest_folder = folder_result.recommended_destination
+            dest_path = os.path.join(dest_folder, folder_result.folder_name)
+            category = folder_result.dominant_category
+            
+            # Interactive mode: prompt for new folders
+            folder_name = os.path.basename(dest_folder).lower()
+            if interactive and not dry_run and folder_name not in existing_folders:
+                if folder_name not in folder_decisions:
+                    analysis_type = folder_result.analysis_type
+                    emoji = "📦" if analysis_type == 'app_bundle' else "📁"
+                    print(f"\n  {emoji} {folder_result.folder_name}")
+                    print(f"     Type: {analysis_type.replace('_', ' ').title()}")
+                    print(f"     Files: {folder_result.file_count}")
+                    print(f"     Destination: {dest_folder}")
+                    response = input(f"     Create '{folder_name}/' and move? [y/N]: ").strip().lower()
+                    folder_decisions[folder_name] = response in ('y', 'yes')
+                    
+                    if folder_decisions[folder_name]:
+                        existing_folders.add(folder_name)
+                
+                if not folder_decisions.get(folder_name, False):
+                    skipped += 1
+                    continue
+            
+            if category not in move_counts:
+                move_counts[category] = 0
+            
+            if dry_run:
+                emoji = "📦" if folder_result.analysis_type == 'app_bundle' else "📁"
+                print(f"  [DRY RUN] {emoji} {folder_result.folder_name}/ ({folder_result.file_count} files)")
+                print(f"            → {dest_folder}/")
+                move_counts[category] += 1
+                folders_moved += 1
+            else:
+                try:
+                    # Create destination folder
+                    os.makedirs(dest_folder, exist_ok=True)
+                    
+                    # Handle existing destination
+                    if os.path.exists(dest_path):
+                        counter = 1
+                        base_name = folder_result.folder_name
+                        while os.path.exists(dest_path):
+                            dest_path = os.path.join(dest_folder, f"{base_name}_{counter}")
+                            counter += 1
+                    
+                    # Move entire folder
+                    shutil.move(folder_result.folder_path, dest_path)
+                    
+                    # Log transaction
+                    self.transaction_log.log_move(
+                        source=folder_result.folder_path,
+                        destination=dest_path,
+                        category=category,
+                        session_id=self.session_id
+                    )
+                    
+                    emoji = "📦" if folder_result.analysis_type == 'app_bundle' else "📁"
+                    print(f"  ✓ {emoji} {folder_result.folder_name}/ → {category}/")
+                    move_counts[category] += 1
+                    folders_moved += 1
+                    
+                except Exception as e:
+                    print(f"  ✗ Error moving folder {folder_result.folder_name}: {e}")
+                    logger.error(f"Folder move error: {folder_result.folder_path} -> {dest_path}: {e}")
+                    errors += 1
+        
+        # ═══════════════════════════════════════════════════════════════════
+        # PHASE 2: Move individual files
+        # ═══════════════════════════════════════════════════════════════════
+
         
         for result in self.results:
             category = result.category
@@ -658,9 +945,11 @@ class SortSense:
         # Print summary
         total_moved = sum(move_counts.values())
         if dry_run:
-            print(f"\n  Would move {total_moved} files, skip {skipped}")
+            folder_msg = f" ({folders_moved} folders)" if folders_moved else ""
+            print(f"\n  Would move {total_moved} items{folder_msg}, skip {skipped}")
         else:
-            print(f"\n  ✅ Moved {total_moved} files, skipped {skipped}, errors {errors}")
+            folder_msg = f" ({folders_moved} folders)" if folders_moved else ""
+            print(f"\n  ✅ Moved {total_moved} items{folder_msg}, skipped {skipped}, errors {errors}")
         
         return move_counts
     

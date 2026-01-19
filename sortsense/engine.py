@@ -248,9 +248,9 @@ class SortSense:
         Detect a subfolder name from file content or parent folder.
         
         Strategy:
-        1. Use parent folder name if it's not a common folder (Downloads, Desktop, etc.)
-        2. For financial docs, try to detect bank/institution name
-        3. For dev files, use project folder name
+        1. For financial docs, FIRST try to detect bank/institution name from content
+        2. Then fall back to parent folder if meaningful
+        3. For other files, use parent folder name if not a common folder
         
         Args:
             filepath: Path to the file
@@ -265,36 +265,58 @@ class SortSense:
         
         # Common folders to ignore
         ignore_folders = {'downloads', 'desktop', 'documents', 'pictures', 'videos', 
-                          'music', 'home', 'users', 'tmp', 'temp', '~'}
+                          'music', 'home', 'users', 'tmp', 'temp', '~', 'statements',
+                          'bank', 'bills', 'receipts', 'invoices', 'new-folder-with-items'}
         
-        # If parent folder is meaningful (not a common system folder), use it
-        if parent_folder.lower() not in ignore_folders and not parent_folder.startswith('.'):
-            # Clean up the folder name (lowercase, replace spaces with dashes)
-            subfolder = parent_folder.lower().replace(' ', '-')
-            return subfolder
-        
-        # For financial category, try to detect institution from content
+        # For financial category, FIRST try to detect institution from content
         if category in ('sikasem', 'finance', 'financial'):
             text_lower = text.lower() if text else ''
-            # Common financial institutions
+            # Common financial institutions and credit unions
             institutions = {
-                'chase': ['chase bank', 'jpmorgan chase', 'chase.com'],
+                'chase': ['chase bank', 'jpmorgan chase', 'chase.com', 'jpmcb'],
                 'bank-of-america': ['bank of america', 'bofa', 'bankofamerica'],
                 'wells-fargo': ['wells fargo', 'wellsfargo'],
                 'capital-one': ['capital one', 'capitalone'],
-                'navy-federal': ['navy federal', 'navyfcu'],
+                'navy-federal': ['navy federal', 'navyfcu', 'nfcu'],
                 'usaa': ['usaa'],
                 'penfed': ['pentagon federal', 'penfed'],
-                'discover': ['discover card', 'discover.com'],
+                'discover': ['discover card', 'discover.com', 'discover bank'],
                 'amex': ['american express', 'amex'],
-                'citi': ['citibank', 'citi.com'],
+                'citi': ['citibank', 'citi.com', 'citicard'],
                 'langley': ['langley federal', 'langleyfcu'],
                 'digital-fcu': ['digital federal', 'dcu'],
+                'alliant': ['alliant credit union', 'alliant cu'],
+                'charles-schwab': ['charles schwab', 'schwab bank'],
+                'fidelity': ['fidelity investments', 'fidelity.com'],
+                'vanguard': ['vanguard', 'vanguard.com'],
+                'td-bank': ['td bank', 'td ameritrade'],
+                'pnc': ['pnc bank', 'pnc.com'],
+                'regions': ['regions bank', 'regions.com'],
+                'suntrust': ['suntrust', 'truist'],
+                'barclays': ['barclays', 'barclaycard'],
             }
             for subfolder, patterns in institutions.items():
                 for pattern in patterns:
                     if pattern in text_lower:
                         return subfolder
+            
+            # If no specific bank found, check for account types as subfolders
+            account_types = {
+                'checking': ['checking', 'chk', 'dda'],
+                'savings': ['savings', 'sav'],
+                'credit-cards': ['credit card', 'creditcard', 'visa', 'mastercard'],
+                'investments': ['investment', 'brokerage', 'ira', '401k', 'stocks'],
+            }
+            for subfolder, patterns in account_types.items():
+                for pattern in patterns:
+                    if pattern in text_lower:
+                        return subfolder
+        
+        # For non-financial files, or if no bank detected, use parent folder
+        if parent_folder.lower() not in ignore_folders and not parent_folder.startswith('.'):
+            # Clean up the folder name (lowercase, replace spaces with dashes)
+            subfolder = parent_folder.lower().replace(' ', '-')
+            return subfolder
         
         return ""
     
